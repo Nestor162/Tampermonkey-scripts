@@ -1,0 +1,224 @@
+// ==UserScript==
+// @name          Youtube Advanced Speed Controller (Magnet UI/UX Log Scale)
+// @namespace     http://tampermonkey.net/
+// @version       0.4
+// @description   Slider de velocidad de YouTube con escala logarítmica para control fino en velocidades bajas y efecto 'imán' en velocidades clave.
+// @author        Ehren Julien-Neitzert (UI/UX mods by AI)
+// @match         https://www.youtube.com/*
+// @grant         GM_addStyle
+// @run-at        document-idle
+// ==/UserScript==
+
+(function() {
+    'use strict';
+
+    // --- CONFIGURACIÓN UX Y ESCALA LOGARÍTMICA ---
+    const MIN_RATE = 0.1;
+    const MAX_RATE = 16.0;
+    const KEY_SPEEDS = [1.0, 1.25, 1.5, 1.75, 2.0]; 
+    const SNAP_TOLERANCE = 0.1; 
+    
+    // Estos valores determinan la curva logarítmica:
+    const LOG_BASE = Math.log(MAX_RATE / MIN_RATE);
+
+    /** Convierte el valor del slider lineal (0-1) a una velocidad logarítmica (MIN_RATE-MAX_RATE). */
+    function sliderToRate(sliderValue) {
+        // Asumimos que sliderValue viene de 0 a 100 para simplificar el mapeo,
+        // pero lo normal es que venga de slider.min a slider.max. 
+        // En este script, el slider.min es 0 y slider.max es 1.
+        
+        // Mapea un valor entre 0 y 1 a una velocidad logarítmica
+        const logRate = Math.exp(Math.log(MIN_RATE) + LOG_BASE * sliderValue);
+        return Math.min(MAX_RATE, Math.max(MIN_RATE, logRate));
+    }
+
+    /** Convierte una velocidad logarítmica (MIN_RATE-MAX_RATE) a un valor de slider (0-1). */
+    function rateToSlider(rate) {
+        // Mapea la velocidad logarítmica de vuelta a un valor entre 0 y 1
+        const sliderValue = (Math.log(rate) - Math.log(MIN_RATE)) / LOG_BASE;
+        return Math.min(1, Math.max(0, sliderValue));
+    }
+
+    // --- ESTILOS UI (INTEGRACIÓN) ---
+    GM_addStyle(`
+        /* Contenedor principal: compacto y alineado */
+        .speed-controller-container {
+            display: flex;
+            align-items: center;
+            margin-right: 5px; 
+        }
+        
+        /* Etiqueta de velocidad: más legible y clicable */
+        .speed-label {
+            color: white;
+            font-size: 14px; 
+            font-weight: 500; 
+            width: 40px; 
+            text-align: center;
+            cursor: pointer; 
+            padding: 0 4px; 
+            transition: color .2s;
+        }
+        .speed-label:hover {
+            color: #ff0000; 
+        }
+        
+        /* Slider: compacto y discreto */
+        .speed-slider {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 60px; 
+            height: 3px; 
+            background: rgba(255, 255, 255, 0.4); 
+            outline: none;
+            opacity: 0.7;
+            transition: opacity .2s;
+            cursor: pointer;
+        }
+        .speed-slider:hover {
+            opacity: 1;
+        }
+        
+        /* Dedo del slider: pequeño y color rojo YouTube */
+        .speed-slider::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 12px; 
+            height: 12px; 
+            background: #ff0000; 
+            border-radius: 50%;
+        }
+    `);
+
+    // --- LÓGICA DE FUNCIONES ---
+    
+    function getVideoElement() {
+        return document.querySelector('video');
+    }
+
+    /**
+     * Busca la siguiente velocidad clave en la lista KEY_SPEEDS.
+     */
+    function getNextKeySpeed(currentRate) {
+        let nextSpeed = KEY_SPEEDS[0]; 
+
+        for (let i = 0; i < KEY_SPEEDS.length; i++) {
+            if (KEY_SPEEDS[i] > currentRate + 0.001) { 
+                nextSpeed = KEY_SPEEDS[i];
+                break;
+            }
+        }
+        return nextSpeed;
+    }
+
+    function injectController() {
+        const video = getVideoElement();
+        const rightControls = document.querySelector(".ytp-right-controls"); 
+
+        if (!video || !rightControls || document.getElementById('speed-controller-container')) {
+            return;
+        }
+
+        // 1. Crear elementos
+        const container = document.createElement('div');
+        container.id = 'speed-controller-container';
+        container.className = 'speed-controller-container';
+
+        const label = document.createElement('span');
+        label.className = 'speed-label';
+        // Mostrar velocidad actual
+        label.textContent = `${video.playbackRate.toFixed(2)}x`;
+
+        const slider = document.createElement('input');
+        slider.id = 'speed-slider';
+        slider.className = 'speed-slider';
+        slider.type = 'range';
+        
+        // El slider opera en una escala lineal de 0 a 1 para el mapeo logarítmico
+        slider.min = 0.0;
+        slider.max = 1.0;
+        slider.step = 0.001; 
+        
+        // Inicializar el valor del slider con la velocidad actual mapeada
+        slider.value = rateToSlider(video.playbackRate);
+        slider.title = 'Playback Speed';
+
+        // 2. Lógica del Slider (Escala Logarítmica y Efecto Imán)
+        
+        // Evento 'input': Solo actualiza la etiqueta en tiempo real usando la escala logarítmica.
+        slider.addEventListener('input', () => {
+            // Convertir la posición lineal del slider a una velocidad logarítmica
+            const previewRate = sliderToRate(parseFloat(slider.value));
+            label.textContent = `${previewRate.toFixed(2)}x`;
+        });
+
+        // Evento 'change': Cuando el usuario suelta el slider, aplicamos el 'imán'.
+        slider.addEventListener('change', () => {
+            // 1. Obtener la velocidad logarítmica final
+            let finalRate = sliderToRate(parseFloat(slider.value));
+
+            // 2. Aplicar la lógica del 'freno magnético' (snapping)
+            for (const snapSpeed of KEY_SPEEDS) {
+                // Verificar si la velocidad logarítmica final está cerca de una velocidad clave
+                if (Math.abs(finalRate - snapSpeed) <= SNAP_TOLERANCE) {
+                    finalRate = snapSpeed; 
+                    break;
+                }
+            }
+
+            // 3. Aplicar velocidad y actualizar la UI
+            video.playbackRate = finalRate;
+            
+            // Si hubo snap, actualizamos la posición del slider con el valor mapeado de la velocidad clave
+            slider.value = rateToSlider(finalRate); 
+            label.textContent = `${finalRate.toFixed(2)}x`; 
+        });
+
+
+        // 3. Lógica del Click (Alternancia)
+        
+        // Evento 'click' en la etiqueta: Alterna entre las velocidades clave
+        label.addEventListener('click', () => {
+            const currentRate = video.playbackRate;
+            const newRate = getNextKeySpeed(currentRate);
+
+            // Aplicar la nueva velocidad y actualizar la interfaz
+            video.playbackRate = newRate;
+            
+            // Actualizar la posición del slider al valor mapeado logarítmico de la nueva velocidad
+            slider.value = rateToSlider(newRate); 
+            label.textContent = `${newRate.toFixed(2)}x`;
+        });
+        
+        // 4. Sincronización
+        
+        // Evento 'ratechange': Sincroniza el slider y la etiqueta si YouTube cambia la velocidad.
+        video.addEventListener('ratechange', () => {
+            if (document.activeElement !== slider) {
+                const currentRate = video.playbackRate;
+                
+                // Actualizar la posición del slider con el valor mapeado logarítmico
+                slider.value = rateToSlider(currentRate); 
+                label.textContent = `${currentRate.toFixed(2)}x`;
+            }
+        });
+
+        // 5. Inyectar en la Interfaz de YouTube
+        container.appendChild(label);
+        container.appendChild(slider);
+
+        rightControls.prepend(container);
+    }
+
+    // --- OBSERVADOR (ROUTING) ---
+    const observer = new MutationObserver(() => {
+        if (document.querySelector(".ytp-right-controls")) {
+            injectController();
+        }
+    });
+
+    observer.observe(document.body, {
+        childList: true,
+        subtree: true
+    });
+})();
