@@ -1,0 +1,192 @@
+// ==UserScript==
+// @name          Youtube Advanced Speed Controller (Buttons UI/Fine-Tuning)
+// @namespace     http://tampermonkey.net/
+// @version       0.5
+// @description   Controlador de velocidad de YouTube con botones de incremento/decremento para ajuste fino y alternancia al hacer click en la velocidad.
+// @author        Ehren Julien-Neitzert (UI/UX mods by AI)
+// @match         https://www.youtube.com/*
+// @grant         GM_addStyle
+// @run-at        document-idle
+// ==/UserScript==
+
+(function() {
+    'use strict';
+
+    // --- CONFIGURACIÓN UX ---
+    const KEY_SPEEDS = [1.0, 1.25, 1.5, 1.75, 2.0]; // Velocidades clave para la alternancia
+    const FINE_TUNING_STEP = 0.05; // Paso para el ajuste fino con las flechas (ej: 0.05x)
+    const MIN_RATE = 0.1;
+    const MAX_RATE = 16.0;
+
+    /**
+     * Función para encontrar la siguiente velocidad clave.
+     */
+    function getNextKeySpeed(currentRate) {
+        let nextSpeed = KEY_SPEEDS[0]; 
+        for (let i = 0; i < KEY_SPEEDS.length; i++) {
+            // Tolerancia para punto flotante
+            if (KEY_SPEEDS[i] > currentRate + 0.001) { 
+                nextSpeed = KEY_SPEEDS[i];
+                break;
+            }
+        }
+        return nextSpeed;
+    }
+
+    // --- ESTILOS UI (CONTROL DE BOTONES) ---
+    GM_addStyle(`
+        /* Contenedor principal: estilo 'contador' compacto y alineado */
+        .speed-controller-container {
+            display: flex;
+            align-items: center;
+            margin-right: 5px; 
+            background: rgba(255, 255, 255, 0.1); /* Fondo sutil para agrupar */
+            border-radius: 4px;
+        }
+
+        /* Etiqueta de velocidad: centro clicable */
+        .speed-label {
+            color: white;
+            font-size: 14px; 
+            font-weight: 500; 
+            width: 45px; /* Más ancho para que sea cómodo de clickear */
+            text-align: center;
+            cursor: pointer; 
+            padding: 4px 2px;
+            transition: background .2s;
+        }
+        .speed-label:hover {
+            background: rgba(255, 255, 255, 0.2);
+            color: #ff0000; /* Feedback visual */
+        }
+        
+        /* Estilo para los botones de ajuste fino (flechas) */
+        .speed-button {
+            background: none;
+            border: none;
+            color: white;
+            font-size: 18px; /* Tamaño más grande para la flecha */
+            padding: 0 4px;
+            margin: 0;
+            cursor: pointer;
+            outline: none;
+            transition: color .1s;
+            height: 100%; /* Para alinear verticalmente */
+            display: flex;
+            align-items: center;
+        }
+        .speed-button:hover {
+            color: #ff0000; /* Color rojo de YouTube al pasar el ratón */
+        }
+        .speed-button:active {
+            color: #ff5555; /* Feedback al presionar */
+        }
+    `);
+
+    // --- LÓGICA DE INYECCIÓN Y EVENTOS ---
+    
+    function getVideoElement() {
+        return document.querySelector('video');
+    }
+
+    function injectController() {
+        const video = getVideoElement();
+        const rightControls = document.querySelector(".ytp-right-controls"); 
+
+        if (!video || !rightControls || document.getElementById('speed-controller-container')) {
+            return;
+        }
+
+        // --- 1. Crear elementos ---
+        
+        const container = document.createElement('div');
+        container.id = 'speed-controller-container';
+        container.className = 'speed-controller-container';
+
+        // Botón de Decremento (Abajo)
+        const btnDown = document.createElement('button');
+        btnDown.className = 'speed-button';
+        btnDown.innerHTML = '&#9660;'; // Flecha hacia abajo (▼)
+        btnDown.title = 'Disminuir velocidad';
+
+        // Etiqueta de Velocidad (Centro/Alternancia)
+        const label = document.createElement('span');
+        label.className = 'speed-label';
+        label.textContent = `${video.playbackRate.toFixed(2)}x`;
+
+        // Botón de Incremento (Arriba)
+        const btnUp = document.createElement('button');
+        btnUp.className = 'speed-button';
+        btnUp.innerHTML = '&#9650;'; // Flecha hacia arriba (▲)
+        btnUp.title = 'Aumentar velocidad';
+
+        
+        // --- 2. Funciones de Control y Actualización ---
+
+        /**
+         * Aplica la nueva velocidad y actualiza la etiqueta.
+         */
+        function updateSpeed(newRate) {
+            // Asegurarse de no exceder los límites
+            const finalRate = Math.min(MAX_RATE, Math.max(MIN_RATE, newRate));
+            
+            // Aplicar la velocidad
+            video.playbackRate = finalRate;
+            
+            // Actualizar la interfaz
+            label.textContent = `${finalRate.toFixed(2)}x`;
+        }
+
+        // --- 3. Lógica de Eventos ---
+
+        // Evento: Alternancia (Click en el número)
+        label.addEventListener('click', () => {
+            const currentRate = video.playbackRate;
+            const newRate = getNextKeySpeed(currentRate);
+            updateSpeed(newRate);
+        });
+        
+        // Evento: Incremento (Click en la flecha arriba)
+        btnUp.addEventListener('click', () => {
+            const currentRate = video.playbackRate;
+            // Suma y redondea para evitar problemas de punto flotante (ej: 1.0500000000000003)
+            const newRate = Math.round((currentRate + FINE_TUNING_STEP) * 100) / 100;
+            updateSpeed(newRate);
+        });
+
+        // Evento: Decremento (Click en la flecha abajo)
+        btnDown.addEventListener('click', () => {
+            const currentRate = video.playbackRate;
+            const newRate = Math.round((currentRate - FINE_TUNING_STEP) * 100) / 100;
+            updateSpeed(newRate);
+        });
+
+        // Evento de Sincronización (si YouTube cambia la velocidad)
+        video.addEventListener('ratechange', () => {
+            const currentRate = video.playbackRate;
+            label.textContent = `${currentRate.toFixed(2)}x`;
+        });
+
+
+        // --- 4. Inyectar en la Interfaz de YouTube ---
+        
+        container.appendChild(btnDown);
+        container.appendChild(label);
+        container.appendChild(btnUp);
+
+        // Inyectamos antes de los otros controles derechos
+        rightControls.prepend(container);
+    }
+
+    // --- OBSERVADOR (ROUTING) ---
+    const observer = new MutationObserver(() => {
+        if (document.querySelector(".ytp-right-controls")) {
+            injectController();
+        }
+    });
+
+    observer.observe(document.body, {
+        childList: true,
+        subtree: true
+    });
+})();
